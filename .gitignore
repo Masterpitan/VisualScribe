@@ -1,0 +1,27 @@
+# Python virtual environment
+.venv/
+venv/
+ENV/
+env/
+
+# Environment secrets
+.env
+*.local
+
+# Byte-compiled / optimized files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Temporary and export assets
+temp_assets/
+exports/
+*.png
+*.jpg
+*.pdf
+
+# Testing & IDE
+.pytest_cache/
+.DS_Store
+.idea/
+.vscode/

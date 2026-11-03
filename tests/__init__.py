@@ -1,0 +1,3 @@
+"""
+VisualScribe Pipeline Integration Tests
+"""
