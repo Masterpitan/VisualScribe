@@ -6,8 +6,14 @@
 
 [![Meta AI](https://img.shields.io/badge/Meta%20AI-SAM%203.1%20%7C%20Muse%20Models-0668E1?logo=meta)](https://meta.ai)
 [![Baseten](https://img.shields.io/badge/Baseten-2M%20TPM%20Inference-10B981?logo=fastapi)](https://baseten.co)
+[![Live Demo](https://img.shields.io/badge/Live%20Demo-visualscribe.pitadcloud.com-success?logo=googlechrome&logoColor=white)](https://visualscribe.pitadcloud.com)
 [![Python](https://img.shields.io/badge/Python-3.10+-3776AB?logo=python)](https://python.org)
 [![Streamlit](https://img.shields.io/badge/Streamlit-1.35+-FF4B4B?logo=streamlit)](https://streamlit.io)
+
+---
+
+> 🌐 **Try the Live Web App:** [https://visualscribe.pitadcloud.com](https://visualscribe.pitadcloud.com)  
+> *Production deployed on AWS with Nginx reverse proxy, Let's Encrypt SSL/TLS, and hardware-gated camera controls.*
 
 ---
 
@@ -123,6 +129,15 @@ streamlit run app.py
 ```
 Open [http://localhost:8501](http://localhost:8501) in your browser.  
 *(Tip: Click **"Load Demo Slide"** in the sidebar to test immediately with a Quantum Mechanics lecture slide!)*
+
+---
+
+## 🌐 Live Cloud Deployment
+
+VisualScribe is live in production and accessible globally:
+- **Public URL:** [https://visualscribe.pitadcloud.com](https://visualscribe.pitadcloud.com)
+- **Infrastructure:** AWS EC2 (Ubuntu 24.04 LTS, Nginx reverse proxy with WebSocket stream pass-through, Let's Encrypt SSL/TLS, and systemd 24/7 background service)
+- **Hardware Security:** Camera hardware is strictly gated behind an explicit UI toggle for student privacy.
 
 ---
 
