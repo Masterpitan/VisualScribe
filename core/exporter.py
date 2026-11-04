@@ -624,7 +624,7 @@ def export_study_guide_pdf(
     # ---------------------------------------------------------
     check_space(40)
     current_page.draw_rect(fitz.Rect(margin_x, curr_y, margin_x + 4, curr_y + 16), fill=(0.15, 0.4, 0.9))
-    current_page.insert_text(fitz.Point(margin_x + 12, curr_y + 14), "2. Segmented Visual Diagrams & LaTeX Formulations", fontsize=12, color=(0.1, 0.15, 0.3))
+    current_page.insert_text(fitz.Point(margin_x + 12, curr_y + 14), "2. Segmented Visual Assets & Technical Deconstructions", fontsize=12, color=(0.1, 0.15, 0.3))
     curr_y += 24
 
     # Build map of crops from regions
