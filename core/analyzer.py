@@ -39,29 +39,27 @@ def analyze_crop(
     headers = get_headers()
 
     system_prompt = (
-        "You are an expert technical professor and multimodal STEM analyst powered by Muse Wonder. "
-        "Analyze the provided cropped image from an academic slide, textbook, or whiteboard.\n\n"
+        "You are an expert multimodal visual analyst capable of interpreting ANY visual, "
+        "including network packet captures, software UI screenshots, system architectures, biology diagrams, "
+        "circuit schematics, mathematical equations, data plots, tables, and engineering flowcharts.\n\n"
         "Instructions:\n"
-        "1. Classify the content type: 'diagram', 'equation', 'chart', 'table', or 'plain_text'.\n"
-        "   If the crop contains ONLY regular reading text paragraphs, bullet points of explanatory prose, or slide headers without any diagram or math formula, mark 'is_visual_or_math': false and 'category_hint': 'plain_text'.\n"
-        "2. Extract all mathematical equations, variables, or chemical formulas into validated standard LaTeX.\n"
-        "   Use `$$ ... $$` for standalone equations and `$ ... $` for inline variables.\n"
-        "   Formally define variables and mathematical symbols (e.g., 'where x in R represents...'). DO NOT write childish verbalized phrases like 'In words: (short side)^2 + ...'.\n"
-        "3. If it is a diagram, flowchart, or circuit, describe its components (arrows, nodes, directions, labels) with technical precision.\n"
-        "4. Provide a rigorous, formal conceptual explanation of the governing laws or theorems.\n"
-        "5. Summarize 2 to 4 concise technical takeaways.\n\n"
+        "1. Identify the domain and exact nature of this visual: What is it showing? (e.g., Wireshark packet capture, network topology, chemical reaction, circuit, mathematical derivation, algorithm flowchart, parameter table, etc.).\n"
+        "2. If it is a network trace, log, software screenshot, or data table: Transcribe and interpret visible IPs, ports, protocols (e.g. DNS, HTTP, TCP), filter criteria, timestamps, and column headers.\n"
+        "3. If it contains genuine mathematical equations: Extract them into standard LaTeX ($...$ or $$...$$). IF NO MATH EXISTS, LEAVE 'latex' AS EMPTY STRING \"\". NEVER invent artificial equations.\n"
+        "4. Provide a clear, technically rigorous explanation of what the visual demonstrates, what action is taking place, and its operational significance.\n"
+        "5. Provide 2 to 4 concrete technical takeaways.\n\n"
         "You MUST respond ONLY with a valid JSON object matching this schema:\n"
         "{\n"
         '  "is_visual_or_math": true,\n'
         '  "category_hint": "diagram",\n'
-        '  "title": "Short descriptive title of the visual/concept",\n'
-        '  "latex": "$$ ... $$ (or empty string if no math)",\n'
-        '  "explanation": "Thorough step-by-step conceptual explanation.",\n'
+        '  "title": "Concise descriptive title of what this visual represents",\n'
+        '  "latex": "",\n'
+        '  "explanation": "Detailed explanation of what this visual displays and does.",\n'
         '  "key_takeaways": ["Takeaway 1", "Takeaway 2"]\n'
         "}"
     )
 
-    user_text = f"Analyze this cropped {category_hint} element. Adhere strictly to the requested JSON format."
+    user_text = f"Analyze this cropped {category_hint} element. Provide an accurate and comprehensive breakdown."
     if user_instruction:
         user_text += f"\nUser Directive / Focus Context: {user_instruction}"
 
@@ -80,18 +78,29 @@ def analyze_crop(
         "temperature": 0.2
     }
 
-    try:
-        resp = requests.post(url, headers=headers, json=payload, timeout=DEFAULT_TIMEOUT_SECONDS)
-        if resp.status_code == 200:
-            data = resp.json()
-            raw_content = parse_response_content(data)
-            parsed = _parse_analysis_json(raw_content, default_title=f"{category_hint.capitalize()} #{region_id}", default_cat=category_hint)
-            parsed["id"] = region_id
-            return parsed
-        else:
-            logger.warning(f"Muse Wonder API HTTP {resp.status_code}: {resp.text}")
-    except Exception as e:
-        logger.error(f"Error during Muse Wonder analysis: {e}")
+    last_error = None
+    for attempt in range(2):
+        try:
+            resp = requests.post(url, headers=headers, json=payload, timeout=DEFAULT_TIMEOUT_SECONDS)
+            if resp.status_code == 200:
+                data = resp.json()
+                raw_content = parse_response_content(data)
+                parsed = _parse_analysis_json(raw_content, default_title=f"{category_hint.capitalize()} #{region_id}", default_cat=category_hint)
+                parsed["id"] = region_id
+                return parsed
+            elif resp.status_code in (429, 500, 502, 503, 504):
+                logger.warning(f"Muse Wonder transient HTTP {resp.status_code} (attempt {attempt+1}/2). Backing off...")
+                import time
+                time.sleep(2.0)
+                continue
+            else:
+                logger.warning(f"Muse Wonder API HTTP {resp.status_code}: {resp.text}")
+                break
+        except Exception as e:
+            logger.warning(f"Error during Muse Wonder analysis (attempt {attempt+1}/2): {e}")
+            last_error = e
+            import time
+            time.sleep(1.5)
 
     # Fallback response if API fails
     return _generate_fallback_analysis(crop_image, category_hint, region_id)
@@ -135,12 +144,14 @@ def _parse_analysis_json(raw_text: str, default_title: str, default_cat: str = "
         }
 
     # Fallback to text parsing
+    sentences = [s.strip() for s in re.split(r"[.\n]+", raw_text) if len(s.strip()) > 20 and not s.strip().startswith("{")]
+    clean_takeaways = sentences[:3] if sentences else ["Visual structure and operational parameters extracted from source."]
     return {
         "title": default_title,
         "category_hint": default_cat,
         "latex": "",
         "explanation": raw_text if raw_text else "Visual element extracted.",
-        "key_takeaways": ["Visual diagram isolated from source document."],
+        "key_takeaways": clean_takeaways,
         "is_valid_asset": default_cat != "plain_text"
     }
 
@@ -149,18 +160,19 @@ def _generate_fallback_analysis(image: Image.Image, category_hint: str, region_i
     """Fallback generator when API is offline or rate-limited."""
     w, h = image.size
     is_valid = category_hint != "plain_text" and category_hint != "text"
+    display_cat = category_hint if category_hint != "equation" else "visual"
     return {
         "id": region_id,
-        "title": f"Extracted {category_hint.capitalize()} #{region_id}",
-        "latex": "$$ f(x) = \\int_{-\\infty}^{\\infty} \\hat{f}(\\xi) e^{2\\pi i x \\xi} d\\xi $$" if category_hint == "equation" else "",
+        "title": f"Visual Element #{region_id} ({display_cat.capitalize()})",
+        "latex": "",
         "explanation": (
-            f"Segmented visual region ({w}x{h} px) identified as a high-density "
-            f"{category_hint} component. Diagram mechanics and structural relationships extracted."
+            f"Segmented visual region ({w}x{h} px) containing technical "
+            f"{display_cat} structure, parameters, or data."
         ),
         "key_takeaways": [
-            f"High-contrast visual region #{region_id} extracted from slide.",
-            "Visual structure preserved for study guide compilation."
+            f"Isolated {display_cat} component #{region_id} from source visual.",
+            "Visual structure preserved for technical study analysis."
         ],
-        "category_hint": category_hint,
+        "category_hint": display_cat,
         "is_valid_asset": is_valid
     }

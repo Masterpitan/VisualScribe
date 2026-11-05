@@ -14,10 +14,13 @@ from PIL import Image, ImageDraw, ImageFont
 # Import core modules
 from config import (
     META_API_KEY,
+    BASETEN_API_KEY,
+    BASETEN_MODEL,
     MODEL_MUSE_WONDER,
     MODEL_MUSE_SPARK,
     MODEL_SAM,
-    verify_api_connection
+    verify_api_connection,
+    verify_baseten_connection
 )
 from core.pdf_loader import load_document, get_document_bytes
 from core.segmenter import segment_visual_regions, draw_bounding_boxes
@@ -226,10 +229,12 @@ with st.sidebar:
         help="Upload multi-page PDFs, textbook photos, whiteboard snapshots, or diagram images."
     )
 
-    with st.expander("📸 Or capture photo with camera"):
-        camera_img = st.camera_input("Take a photo of your textbook, notes, or whiteboard")
-        if camera_img is not None:
-            uploaded_file = camera_img
+    with st.expander("📸 Or capture photo with device camera"):
+        enable_camera = st.checkbox("Turn on Camera Hardware", value=False, help="Check this box only when you want to take a live photo of physical notes or a whiteboard.")
+        if enable_camera:
+            camera_img = st.camera_input("Take photo of your textbook, notes, or whiteboard")
+            if camera_img is not None:
+                uploaded_file = camera_img
 
     col_btn1, col_btn2 = st.columns([1, 1])
     with col_btn2:
@@ -288,23 +293,28 @@ with st.sidebar:
 
     # User Custom Guidance Prompt
     st.divider()
-    st.subheader("💬 Prompt & Special Instructions")
-    user_prompt = st.text_area(
-        "Custom Directive / Focus Goal",
-        placeholder="e.g. 'Go to page 5 and extract the proof of Theorem 2', or 'Focus on the circuit diagram and Ohm's law equations', or 'Extract at least 5 equations'",
-        help="Prompt the model with custom instructions. If you mention a page number (e.g. 'page 4'), it will automatically navigate there!"
-    )
+    st.subheader("💬 Study Focus & Directives")
+    st.caption("Instruct the AI on what to emphasize in the visual analysis, cheatsheet, and quiz:")
 
-    # Auto-navigate to page if user prompted something like 'page 4'
-    if user_prompt and len(st.session_state.pages) > 1:
-        import re
-        p_match = re.search(r'\b(?:page|p\.?)\s*(\d+)\b', user_prompt, re.IGNORECASE)
-        if p_match:
-            target_p = int(p_match.group(1))
-            if 1 <= target_p <= len(st.session_state.pages) and (target_p - 1) != st.session_state.selected_page_idx:
-                st.session_state.selected_page_idx = target_p - 1
-                st.session_state.processed = False
-                st.info(f"🎯 Auto-navigating to Page {target_p} based on your prompt directive.")
+    if "prompt_input" not in st.session_state:
+        st.session_state.prompt_input = ""
+
+    # Quick preset chips for rapid directive selection
+    preset_col1, preset_col2 = st.columns(2)
+    with preset_col1:
+        if st.button("📐 Rigorous Proofs", use_container_width=True, help="Emphasize mathematical derivations, algebraic steps, and proofs"):
+            st.session_state.prompt_input = "Focus on step-by-step mathematical derivations and formal proofs with clear variable definitions."
+    with preset_col2:
+        if st.button("📝 Exam-Style Quiz", use_container_width=True, help="Make the quiz challenging, testing numerical problems and edge cases"):
+            st.session_state.prompt_input = "Make the active-recall quiz challenging and calculation-heavy with numerical problem-solving and boundary conditions."
+
+    user_prompt = st.text_area(
+        "Custom Instructions (Optional)",
+        value=st.session_state.prompt_input,
+        placeholder="e.g. 'Focus on the circuit diagram and explain Ohm's law step-by-step', 'Make the quiz calculation-heavy', 'Explain for an undergraduate exam prep'",
+        help="Guide the AI to tailor its explanations, derivations, and quiz questions to your specific study needs."
+    )
+    st.session_state.prompt_input = user_prompt
 
     # Parameter Controls
     st.divider()
@@ -336,6 +346,23 @@ with st.sidebar:
     num_quiz_q = st.slider("Active-Recall Quiz Questions", min_value=2, max_value=6, value=4)
     use_sam_api = st.checkbox("Attempt SAM 3.1 / Vision AI", value=True, help="Calls Multimodal Vision models with anti-text constraints; automatically falls back to local OpenCV visual segmentation if unavailable.")
 
+    # 3. Model & Inference Engine
+    st.divider()
+    st.subheader("3. Reasoning & Inference Engine")
+    provider_options = [
+        f"🚀 Baseten [{BASETEN_MODEL}] (2M TPM)",
+        f"🌐 Meta Model API [{MODEL_MUSE_SPARK}]"
+    ]
+    raw_env_provider = os.getenv("LLM_PROVIDER", "baseten").split("#")[0].strip().lower()
+    default_provider_idx = 0 if (raw_env_provider == "baseten" or (not META_API_KEY and BASETEN_API_KEY)) else 1
+    selected_provider_label = st.selectbox(
+        "Inference Engine",
+        provider_options,
+        index=default_provider_idx,
+        help="Select which high-performance backend to route cheatsheet synthesis and active-recall quiz generation through."
+    )
+    active_provider = "baseten" if "Baseten" in selected_provider_label else "meta"
+
     # Action Trigger
     st.divider()
     process_btn = st.button("🚀 Process & Generate Study Guide", type="primary", use_container_width=True)
@@ -351,6 +378,17 @@ st.markdown("""
     transcribes them into validated LaTeX, and generates high-yield cheatsheets, active-recall quizzes, and printable PDFs.</p>
 </div>
 """, unsafe_allow_html=True)
+
+# Prominent Call-To-Action if document/image is loaded but not yet processed
+if st.session_state.pages and not st.session_state.processed:
+    st.markdown(
+        f'<div style="background:#eff6ff; border:1px solid #bfdbfe; border-left:5px solid #3b82f6; padding:12px 16px; border-radius:6px; margin: 12px 0;">'
+        f'<strong>Document/Image Loaded:</strong> <code>{st.session_state.doc_name}</code> '
+        f'({len(st.session_state.pages)} page/image). Ready to extract visual assets & synthesize study guide.</div>',
+        unsafe_allow_html=True
+    )
+    if st.button("🚀 Process & Generate Study Guide Now", type="primary", use_container_width=True, key="hero_process_btn"):
+        process_btn = True
 
 # Process Document Action
 if process_btn:
@@ -372,10 +410,10 @@ if process_btn:
                 focus_mode=focus_mode,
                 user_instruction=user_prompt
             )
-            st.write(f"✅ Isolated **{len(raw_regions)}** candidate calculation / visual regions.")
+            st.write(f"✅ Isolated **{len(raw_regions)}** candidate visual / diagram regions.")
 
             # Step 2: High-speed parallel multimodal analysis via ThreadPoolExecutor
-            st.write(f"🔬 **Analyzing {len(raw_regions)} visual structures & LaTeX in parallel** via Muse Wonder...")
+            st.write(f"🔬 **Analyzing {len(raw_regions)} visual structures in parallel** via Muse Wonder...")
             analyses = []
             valid_regions = []
             progress_bar = st.progress(0)
@@ -399,46 +437,55 @@ if process_btn:
                     completed_count += 1
                     try:
                         orig_reg, analysis = future.result()
+                        # Keep genuine visual assets (diagrams, tables, flowcharts, circuits, screenshots, equations)
                         if analysis.get("is_valid_asset", True) and analysis.get("category_hint") not in ("plain_text", "text"):
                             analyses.append(analysis)
                             orig_reg["category_hint"] = analysis.get("category_hint", orig_reg["category_hint"])
                             valid_regions.append(orig_reg)
                         else:
-                            st.write(f"ℹ️ *Filtered out non-calculation element #{orig_reg['id']}.*")
+                            st.write(f"ℹ️ *Filtered out plain text element #{orig_reg['id']}.*")
                     except Exception as e:
                         pass
                     progress_bar.progress(completed_count / float(max(1, len(raw_regions))))
 
-            # Sort by original ID to preserve visual slide reading order
+            # Fallback guarantee: If all regions were filtered out, preserve raw regions so analysis never fails
+            if not valid_regions:
+                valid_regions = raw_regions
+                if not analyses:
+                    for r in raw_regions:
+                        analyses.append(analyze_crop(r["crop"], r["category_hint"], r["id"], user_instruction=user_prompt))
+
+            # Sort by original ID to preserve visual reading order
             valid_regions.sort(key=lambda r: r["id"])
             analyses.sort(key=lambda a: a.get("id", 0))
 
-            # If all regions were flagged, keep raw regions to avoid empty state
-            if valid_regions:
-                st.session_state.regions = valid_regions
-                st.session_state.analyses = analyses
-            else:
-                st.session_state.regions = raw_regions
-                st.session_state.analyses = analyses or [
-                    analyze_crop(r["crop"], r["category_hint"], r["id"], user_instruction=user_prompt) for r in raw_regions
-                ]
+            st.session_state.regions = valid_regions
+            st.session_state.analyses = analyses
 
-            st.write(f"✅ Parallel analysis complete for **{len(st.session_state.regions)}** assets with validated LaTeX.")
+            st.write(f"✅ Parallel analysis complete for **{len(st.session_state.regions)}** assets.")
 
-            # Step 3: Fast Unified Synthesis & Quiz Generation in 1 pass with Muse Spark
-            st.write("🧠 **Synthesizing master cheatsheet & active-recall quiz (High-Speed Unified Pass)** via Muse Spark...")
+            # Step 3: Fast Unified Synthesis & Quiz Generation in 1 pass
+            import time
+            provider_display = f"Baseten [{BASETEN_MODEL}] (2M TPM)" if active_provider == "baseten" else f"Meta Model API [{MODEL_MUSE_SPARK}]"
+            st.write(f"🧠 **Synthesizing master cheatsheet & active-recall quiz (High-Speed Unified Pass)** via {provider_display}...")
             doc_context = f"{st.session_state.doc_name} (Page {st.session_state.selected_page_idx + 1})" if len(st.session_state.pages) > 1 else st.session_state.doc_name
+            
+            gen_start = time.time()
             summary, quiz = generate_cheatsheet_and_quiz_unified(
                 st.session_state.analyses,
                 document_title=doc_context,
                 num_questions=num_quiz_q,
-                user_instruction=user_prompt
+                user_instruction=user_prompt,
+                provider=active_provider
             )
+            gen_elapsed = round(time.time() - gen_start, 2)
+            st.session_state.gen_latency = gen_elapsed
+            st.session_state.gen_provider = provider_display
             st.session_state.summary = summary
             st.session_state.quiz = quiz
 
             st.session_state.processed = True
-            status.update(label=f"Study Guide for Page {st.session_state.selected_page_idx + 1} Generated Successfully with {len(st.session_state.regions)} Extracts!", state="complete", expanded=False)
+            status.update(label=f"Study Guide Generated in {gen_elapsed}s with {len(st.session_state.regions)} Extracts via {provider_display}!", state="complete", expanded=False)
             st.rerun()
 
 
@@ -510,12 +557,14 @@ with tab2:
         st.info("Generate the study guide first to unlock the interactive cheatsheet and active-recall drill cards.")
     else:
         # High-Yield Summary Section
-        st.subheader("📖 High-Yield Master Cheatsheet (Synthesized by Muse Spark)")
+        st.subheader("📖 High-Yield Master Cheatsheet")
+        if "gen_latency" in st.session_state:
+            st.caption(f"⚡ Synthesis Engine: **{st.session_state.get('gen_provider', 'Inference Backend')}** | Response Latency: **{st.session_state.get('gen_latency', 0)}s**")
         st.markdown(st.session_state.summary)
         st.divider()
 
-        # Detailed Visual Element Breakdowns - STRICTLY DISPLAY GENUINE VISUALS ONLY
-        st.subheader("🔬 Deep-Dive Visual Segmentations & LaTeX Formulations")
+        # Detailed Visual Element Breakdowns
+        st.subheader("🔬 Extracted Visual Assets & Technical Deconstructions")
         valid_analyses = [
             a for a in st.session_state.analyses
             if a.get("is_valid_asset", True) and a.get("category_hint") not in ("plain_text", "text")
@@ -652,6 +701,8 @@ with tab3:
         with st.expander("Show Raw Structured Analyses & Model Outputs"):
             st.json({
                 "document": st.session_state.doc_name,
+                "engine_used": st.session_state.get("gen_provider", "Unknown"),
+                "generation_latency_seconds": st.session_state.get("gen_latency", None),
                 "regions_detected": len(st.session_state.regions),
                 "analyses": st.session_state.analyses,
                 "quiz": st.session_state.quiz

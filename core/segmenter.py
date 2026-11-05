@@ -291,30 +291,20 @@ def _call_vision_segmentation_api(
 
     target_count = max(max_regions, 6)
     system_prompt = (
-        "You are an expert technical visual segmenter and STEM document analyzer.\n"
-        f"GOAL: Locate up to {target_count} genuine mathematical calculation blocks, equation derivations, formula steps, "
-        "scientific plots, graphs, and circuit schematics.\n\n"
+        "You are an expert technical visual segmenter and multimodal document analyzer.\n"
+        f"GOAL: Identify up to {target_count} genuine technical visuals, diagrams, system architectures, "
+        "flowcharts, circuit schematics, packet captures/data tables, or mathematical formula blocks.\n\n"
         "PRIMARY EXTRACTION TARGETS:\n"
-        "1. Mathematical calculations, equation blocks, formulas, integrals, summations, matrices, and algebraic derivations.\n"
-        "2. Technical diagrams, scientific graphs, plots, coordinate systems, and circuit schematics.\n\n"
-        "CRITICAL NEGATIVE CONSTRAINTS (STRICTLY EXCLUDE):\n"
-        "- DO NOT crop textbook decorative designs, publisher logos (e.g., Pearson, Wiley, McGraw-Hill, IEEE), chapter decorative banners, or page header/footer ornaments.\n"
-        "- DO NOT crop plain paragraphs of narrative prose, reading text, or bullet points with no calculations.\n\n"
-    )
-
-    if user_instruction:
-        system_prompt += (
-            f"SPECIAL USER DIRECTIVE / FOCUS GOAL:\n"
-            f"\"{user_instruction}\"\n"
-            f"Strictly prioritize identifying regions and formulas relevant to this user directive.\n\n"
-        )
-
-    system_prompt += (
+        "1. Technical diagrams, network packet captures, system flows, plots, charts, and circuits.\n"
+        "2. Data tables, parameter summaries, and structured UI components.\n"
+        "3. Mathematical calculations and formula derivations (if present).\n\n"
+        "CRITICAL CONSTRAINTS:\n"
+        "- DO NOT crop decorative margins, blank backgrounds, or publisher logos.\n"
+        "- If the ENTIRE image is a single unified diagram, screenshot, or chart, return a single box: [0, 0, 1000, 1000].\n\n"
         "Return ONLY a valid JSON array of objects with keys:\n"
         "'box': [ymin, xmin, ymax, xmax] (normalized coordinates 0 to 1000),\n"
-        "'category_hint': ('equation' | 'diagram' | 'chart' | 'table'),\n"
-        "'label': 'Short title of what the calculation or visual represents'.\n"
-        "If no formulas or scientific visuals exist, return []."
+        "'category_hint': ('diagram' | 'table' | 'chart' | 'equation'),\n"
+        "'label': 'Short title of what the visual represents'."
     )
 
     payload = {
@@ -521,12 +511,11 @@ def _classify_roi_visual_nature(roi: np.ndarray, w: int, h: int) -> Tuple[bool, 
     if ar > 3.5 and line_count >= 2:
         return True, "text"
 
-    # 5. Check for standalone mathematical formula:
-    # Formulas are often isolated, moderate width, and contain distinct horizontal lines (fraction bars, equals)
-    if (ar > 2.0 and h < 140) or (line_count <= 2 and ar > 1.5):
-        return False, "equation"
+    # 5. Check if it represents a structured data table or grid (multi-row structured content)
+    if line_count >= 3 and ar > 1.2:
+        return False, "table"
 
-    # 6. Otherwise it is a diagram, flowchart, graph, or schematic
+    # 6. Otherwise it is a general diagram, schematic, screenshot, or figure
     return False, "diagram"
 
 
@@ -699,6 +688,18 @@ def _post_process_regions(
 
         if len(final_list) >= max_regions:
             break
+
+    # Guaranteed non-empty fallback: If all regions were filtered out or image is a standalone screenshot
+    if not final_list:
+        logger.info("No sub-regions isolated; treating full image as primary visual asset.")
+        final_list.append({
+            "id": 1,
+            "box": [0, 0, w, h],
+            "crop": image.copy(),
+            "category_hint": "diagram",
+            "label": "Primary Visual Asset #1",
+            "confidence": 1.0
+        })
 
     return final_list
 
